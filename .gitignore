@@ -1,0 +1,9 @@
+#python
+*__pycache__
+python
+*.exe
+
+#text resource files
+*.locres
+*.locmeta
+*.json
