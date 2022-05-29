@@ -13,7 +13,6 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
     file = args.file
-    out_dir = args.out_dir
     ext = get_ext(file)
     if args.test:
         if ext!='locmeta':
@@ -26,6 +25,7 @@ if __name__ == '__main__':
         compare(os.path.dirname(meta_path), os.path.dirname(file))
         shutil.rmtree(out_dir)
     else:
+        out_dir = args.out_dir
         if ext=='locmeta':
             locres = LocalizationResources.load(file)
             json_path = locres.save_as_json(out_dir)
