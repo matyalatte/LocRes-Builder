@@ -2,6 +2,8 @@ import os, argparse, shutil
 from locres import LocalizationResources
 from io_util import compare, get_ext
 
+VERSION = '0.1.0'
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('file', help='.locmeta')
@@ -11,6 +13,7 @@ def get_args():
     return args
 
 if __name__ == '__main__':
+    print('LocRes Builder ver{} by matyalatte'.format(VERSION))
     args = get_args()
     file = args.file
     ext = get_ext(file)

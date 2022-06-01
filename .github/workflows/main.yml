@@ -42,7 +42,7 @@ jobs:
       - name: Copy files
         run: |
           cp -r src ../release
-          cp *.bat ../release
+          cp convert.bat ../release
           cp changelog.txt ../release
           cp README.md ../release
           cp LICENSE ../release

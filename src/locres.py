@@ -69,10 +69,14 @@ class Namespace:
     def from_json(self, resource_json, lang):
         self.entries = []
         for key in resource_json:
-            value = resource_json[key][lang]
+            res = resource_json[key]
+            if lang not in res:
+                value = None
+            else:
+                value = res[lang]
             if value is not None:
-                key_hash = resource_json[key]['key_hash']
-                value_hash = resource_json[key]['value_hash']
+                key_hash = res['key_hash']
+                value_hash = res['value_hash']
                 self.entries.append(Entry(key, 0, key_hash=key_hash, value=value, value_hash=value_hash))
 
     def cal_hash(self):
