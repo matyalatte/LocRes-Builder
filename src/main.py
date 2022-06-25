@@ -2,7 +2,7 @@ import os, argparse, shutil
 from locres import LocalizationResources
 from io_util import compare, get_ext
 
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -21,11 +21,13 @@ if __name__ == '__main__':
         if ext!='locmeta':
             raise RuntimeError('Specify a .locmeta file.')
         out_dir = '__temp__'
+        if os.path.exists(out_dir):
+            shutil.rmtree(out_dir)
         locres = LocalizationResources.load(file)
         json_path = locres.save_as_json(out_dir)
         new_locres = LocalizationResources.json_to_locres(json_path)
         meta_path = new_locres.save(out_dir)
-        compare(os.path.dirname(meta_path), os.path.dirname(file))
+        compare(os.path.dirname(meta_path), os.path.dirname(file), ext=['locres', 'locmeta'], rec=1)
         shutil.rmtree(out_dir)
     else:
         out_dir = args.out_dir

@@ -3,7 +3,10 @@
 python
 *.exe
 
-#text resource files
+#resource files
 *.locres
 *.locmeta
 *.json
+*.zip
+out
+samples

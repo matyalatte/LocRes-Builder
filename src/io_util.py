@@ -49,11 +49,18 @@ def read_str(file):
     file.seek(1+utf16,1)
     return string
 
+def read_str_array(file, len=None):
+    return read_array(file, read_str, len=len)
+
 def read_array(file, read_func, len=None):
     if len is None:
         len = read_uint32(file)
     ary=[read_func(file) for i in range(len)]
     return ary
+
+def write_uint8(file, n):
+    bin = n.to_bytes(1, byteorder="little")
+    file.write(bin)
 
 def write_uint32(file, n):
     bin = n.to_bytes(4, byteorder="little")
@@ -69,6 +76,13 @@ def write_str(file, s):
     write_int32(file, num*(1- 2* utf16))
     str_byte = s.encode("utf-16-le"*utf16+"ascii"*(not utf16))
     file.write(str_byte + b'\x00'*(1+utf16))
+
+def write_str_array(file, strings, with_length=False):
+    if with_length:
+        write_uint32(file, len(strings))
+    for s in strings:
+        write_str(file, s)
+    
 
 def write_array(file, ary, with_length=False):
     if with_length:
@@ -112,17 +126,25 @@ def compare_files(file1,file2):
             break
     raise RuntimeError('Not same :{}'.format(i))
 
-def compare(path1, path2):
+def compare(path1, path2, ext=None, rec=0):
     if (not os.path.exists(path1)) or (not os.path.exists(path2)):
+        print(path1)
+        print(path2)
         raise RuntimeError('File not found.')
     if os.path.isfile(path1)!=os.path.isfile(path2):
         raise RuntimeError('Not the same.')
     if os.path.isfile(path1):
+        if ext is not None:
+            if get_ext(path1) not in ext:
+                return
         compare_files(path1, path2)
         return
 
+    if rec==0:
+        return
+    rec-=1
     for f in os.listdir(path1):
         p1 = os.path.join(path1, f)
         p2 = os.path.join(path2, f)
-        compare(p1, p2)
+        compare(p1, p2, ext=ext, rec=rec)
         

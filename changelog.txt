@@ -1,2 +1,5 @@
+ver 0.1.1
+- Added support for locmeta version 1
+
 ver 0.1.0
 - initial release

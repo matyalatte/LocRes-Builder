@@ -1,5 +1,6 @@
 @echo off
-
-python\python.exe src\main.py D:\UE4_MOD_tools\FModel\Output\Exports\Ronin\Content\Localization\Game\Game.locmeta --test
-
+@if "%~1"=="" goto skip
+@pushd %~dp0
+python\python.exe src\main.py "%~1" --test
+@popd
 pause

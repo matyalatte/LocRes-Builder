@@ -156,6 +156,8 @@ def cityhash64(bytes):
 
 #cityhash for strings
 def string_cityhash(string):
+    if string=="":
+        return 0
     raw_hash = cityhash64(string.encode('utf-16-le'))
     hash = (raw_hash & MASK_32) + (((raw_hash >>32) & MASK_32) * 23)
     return hash & MASK_32
