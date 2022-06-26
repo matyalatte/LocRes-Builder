@@ -7,6 +7,7 @@ python
 *.locres
 *.locmeta
 *.json
+*.csv
 *.zip
 out
 samples

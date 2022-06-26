@@ -1,3 +1,7 @@
+ver 0.1.2
+- Changed json format
+- Added csv support
+
 ver 0.1.1
 - Added support for locmeta version 1
 

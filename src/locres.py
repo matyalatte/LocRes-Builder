@@ -2,6 +2,9 @@ import crc
 import cityhash
 from io_util import *
 
+SUPPORTED_FORMAT = ['json', 'csv']
+LINE_FEED = '<LF>'
+
 class Entry:
     def __init__(self, key, value_id, key_hash=None, value=None, value_hash=None):
         self.key_hash = key_hash
@@ -23,9 +26,16 @@ class Entry:
         write_uint32(f, self.value_hash)
         write_uint32(f, self.value_id)
 
-    def cal_hash(self):
+    def gen_hash(self):
         self.key_hash = cityhash.string_cityhash(self.key)
         self.value_hash = crc.string_crc32(self.value)
+
+    def copy_hash(self, entry):
+        self.key_hash = entry.key_hash
+        self.value_hash = entry.value_hash
+
+    def has_hash(self):
+        return self.key_hash is not None
         
     def set_value(self, values):
         self.value = values[self.value_id].str
@@ -41,10 +51,17 @@ class Entry:
         raw_values.append(self.value)
 
 class Namespace:
-    def __init__(self, namespace, entries, namespace_hash=0):
+    def __init__(self, namespace, entries, namespace_hash=None):
         self.namespace_hash = namespace_hash
         self.namespace = namespace
         self.entries = entries
+        self.dict = {entry.key: entry for entry in self.entries}
+
+    def __getitem__(self, key):
+        return self.dict[key]
+    
+    def __contains__(self, key):
+        return key in self.dict
 
     def read(f):
         namespace_hash = read_uint32(f) #namespace hash (cityhash64)
@@ -62,25 +79,34 @@ class Namespace:
     
     def to_json(self):
         return {entry.key: entry.value for entry in self.entries}
-    
-    def to_json_with_lang(self, lang):
-        return {entry.key: {lang: entry.value} for entry in self.entries}
 
-    def from_json(self, resource_json, lang):
-        self.entries = []
-        for key in resource_json:
-            res = resource_json[key]
-            if lang not in res:
-                value = None
-            else:
-                value = res[lang]
+    def to_csv(self):
+        return [[self.namespace+"/"+entry.key, entry.value.replace("\n", LINE_FEED)] for entry in self.entries]
+
+    def load_from_json(ns, json):
+        entries = []
+        for key in json:
+            value = json[key]
             if value is not None:
-                key_hash = res['key_hash']
-                value_hash = res['value_hash']
-                self.entries.append(Entry(key, 0, key_hash=key_hash, value=value, value_hash=value_hash))
+                entries.append(Entry(key, 0, value=value))
+        return Namespace(ns, entries)
 
-    def cal_hash(self):
+    def gen_hash(self):
         self.namespace_hash = cityhash.string_cityhash(self.namespace)
+        list(map(lambda entry:entry.gen_hash(), self.entries))
+
+    def has_hash(self):
+        return self.namespace_hash is not None
+
+    def copy_hash(self, namespace):
+        self.namespace_hash = namespace.namespace_hash
+        for entry in namespace.entries:
+            key = entry.key
+            if key in self:
+                self[key].copy_hash(entry)
+        for entry in self.entries:
+            if not entry.has_hash():
+                raise RuntimeError("Main resource should have all keys local resources have. ({})".format(entry.key))
 
     def set_values(self, values):
         list(map(lambda x: x.set_value(values), self.entries))
@@ -88,6 +114,7 @@ class Namespace:
     def get_values(self, values, hashes):
         list(map(lambda x: x.get_values(values, hashes), self.entries))
 
+    
 class Value:
     def __init__(self, str, count=1):
         self.str = str
@@ -108,6 +135,13 @@ class LocRes:
     def __init__(self, version, namespaces):
         self.version = version
         self.namespaces = namespaces
+        self.dict = {ns.namespace: ns for ns in self.namespaces}
+
+    def __getitem__(self, key):
+        return self.dict[key]
+    
+    def __contains__(self, key):
+        return key in self.dict
 
     def load(file):
         print('Loading {}...'.format(file))
@@ -128,8 +162,6 @@ class LocRes:
             print('  {}: {}'.format(ns.namespace, ns.len()))
 
     def save(self, file):
-        list(map(lambda x: x.cal_hash(), self.namespaces))
-
         values = []
         raw_values = []
         for n in self.namespaces:
@@ -150,27 +182,63 @@ class LocRes:
             f.seek(offset)
             write_uint32(f,value_offset)
 
-    def to_json(self):
-        return {ns.namespace: ns.to_json() for ns in self.namespaces}
+    def save_as_text(self, file, fmt='json'):
+        if fmt not in SUPPORTED_FORMAT:
+            raise RuntimeError('Unsupported format. ({})'.format(fmt))
 
-    def to_json_with_lang(self, lang):
-        return {ns.namespace: ns.to_json_with_lang(lang) for ns in self.namespaces}
+        print('Saving {}...'.format(file))
+        if fmt=='json':
+            json = {ns.namespace: ns.to_json() for ns in self.namespaces}
+            save_json(file, json)
+        elif fmt=='csv':
+            csv = sum([ns.to_csv() for ns in self.namespaces], [])
+            save_csv(file, [["namespace/key", "value"]]+csv)
 
-    def json_to_locres(res_version, resource_json, lang):
-        locres = LocRes(res_version, [])
-        for ns in resource_json:
-            namespace = Namespace(ns, None)
-            namespace.from_json(resource_json[ns], lang)
-            if namespace.len()>0:
-                locres.namespaces.append(namespace)
-        return locres
+    def load_from_text(res_version, file, fmt='json'):
+        print('Loading {}...'.format(file))
+
+        if fmt=='json':
+            json = load_json(file)
+            
+        elif fmt=='csv':
+            csv = load_csv(file)
+            if csv[0][0]=='namespace/key':
+                csv = csv[1:]
+            json = {}
+            for row in csv:
+                key = row[0].split("/")
+                if len(key)<2:
+                    raise RuntimeError('All keys in csv should have a namespace.')
+                namespace = key[0]
+                key = "/".join(key[1:])
+                if namespace not in json:
+                    json[namespace]={}
+                json[namespace][key]=row[1].replace(LINE_FEED, '\n')
+
+        namespaces = []
+        for ns in json:
+            namespace = Namespace.load_from_json(ns, json[ns])
+            namespaces.append(namespace)
+        return LocRes(res_version, namespaces)
+
+    def gen_hash(self):
+        list(map(lambda ns:ns.gen_hash(), self.namespaces))
+
+    def copy_hash(self, locres):
+        for ns in locres.namespaces:
+            key = ns.namespace
+            if key in self:
+                self[key].copy_hash(ns)
+        for ns in self.namespaces:
+            if not ns.has_hash():
+                raise RuntimeError("Main resource should have all namespaces local resources have. ({})".format(ns.namespace))
 
 class LocMeta:
     MAGIC_GUID = b'\x4F\xEE\x4C\xA1\x68\x48\x55\x83\x6C\x4C\x46\xBD\x70\xDA\x50\x7C'
 
-    def __init__(self, version, main_lang, main_file, local_languages):
+    def __init__(self, version, main_language, main_file, local_languages):
         self.version = version
-        self.main_lang = main_lang
+        self.main_language = main_language
         self.main_file = main_file
         self.local_languages = local_languages
         self.resource_name = os.path.basename(main_file).split('.')[0]
@@ -182,42 +250,88 @@ class LocMeta:
             version=read_uint8(f)
             if version not in [0, 1]:
                 raise RuntimeError('Unsupported locmeta version. ({})'.format(version))
-            main_lang = read_str(f)
+            main_language = read_str(f)
             main_file = read_str(f)
             if version==1:
                 local_languages = read_str_array(f)
-                local_languages.remove(main_lang)
+                local_languages.remove(main_language)
             else:
                 local_languages = None
-        print('Main language: {}'.format(main_lang))
+        print('Main language: {}'.format(main_language))
         print('Main resource: {}'.format(main_file))
-        return LocMeta(version, main_lang, main_file, local_languages)
+        return LocMeta(version, main_language, main_file, local_languages)
 
     def save(self, file):
         print('Saving {}...'.format(file))
         with open(file, 'wb') as f:
             f.write(LocMeta.MAGIC_GUID)
             write_uint8(f, self.version)
-            write_str(f, self.main_lang)
+            write_str(f, self.main_language)
             write_str(f, self.main_file.replace('\\', '/'))
             if self.version==1:
-                languages = self.local_languages+[self.main_lang]
+                languages = self.local_languages+[self.main_language]
                 write_str_array(f, sorted(list(set(languages))), with_length=True)
 
-    def to_json(self):
-        return {
-            'meta_version': self.version,
-            'resource_name': self.resource_name,
-            'main_language': self.main_lang
-        }
+    def save_as_text(self, file, res_version, fmt='json'):
+        print('Saving {}...'.format(file))
+        if fmt=='json':
+            self.save_as_json(file, res_version)
+        elif fmt=='csv':
+            self.save_as_csv(file, res_version)
 
+    def save_as_json(self, file, res_version):
+        json = {
+            'locmeta_version': self.version,
+            'locres_version': res_version,
+            'resource_name': self.resource_name,
+            'main_language': self.main_language,
+            'local_languages': self.local_languages
+        }
+        save_json(file, json)
+
+    def save_as_csv(self, file, res_version):
+        local_langs = '{}'.format(self.local_languages)[1:-1].replace("'", "")
+        csv = [
+            ["key", "value"],
+            ['locmeta_version', self.version],
+            ['locres_version', res_version],
+            ['resource_name', self.resource_name],
+            ['main_language', self.main_language],
+            ['local_languages', local_langs]
+        ]
+        save_csv(file, csv)
+
+    def load_from_text(file, fmt='json'):
+        if fmt not in SUPPORTED_FORMAT:
+            raise RuntimeError('Unsupported format. ({})'.format(fmt))
+        
+        print('Loading {}...'.format(file))
+        if fmt=='json':
+            json = load_json(file)
+        elif fmt=='csv':
+            csv = load_csv(file)
+            if csv[0][0]=='key':
+                csv = csv[1:]
+            json = {row[0]:row[1] for row in csv}
+            json['locmeta_version']=int(json['locmeta_version'])
+            json['locres_version']=int(json['locres_version'])
+            json['local_languages']=json['local_languages'].replace(" ", "").split(',')
+
+        version = json['locmeta_version']
+        resource_name = json['resource_name']
+        main_language = json['main_language']
+        local_languages = json['local_languages']
+        main_file = os.path.join(main_language, resource_name+'.locres')
+        locmeta = LocMeta(version, main_language, main_file, local_languages)
+        return locmeta, json['locres_version']
+        
 class LocalizationResources:
     def __init__(self, meta, langs, resources):
         self.meta = meta
         self.langs = langs
         self.resources = resources
         
-        main_id = self.langs.index(self.meta.main_lang)
+        main_id = self.langs.index(self.meta.main_language)
         main_language = self.langs.pop(main_id)
         self.main_res = self.resources.pop(main_id)
 
@@ -226,7 +340,10 @@ class LocalizationResources:
         self.main_res.print()
         for lang, res in zip(langs, resources):
             print(lang)
-            res.print()
+            if res is not None:
+                res.print()
+            else:
+                print('  File not found.')
 
     def load(meta_path):
 
@@ -238,12 +355,11 @@ class LocalizationResources:
         sub_dirs = [d for d in sub_dirs if os.path.exists(os.path.join(dir, d, meta.resource_name+'.locres'))]
         if len(sub_dirs)==0:
             raise RuntimeError('Not found subdirectories for .locres files.')
-        if meta.main_lang not in sub_dirs:
-            raise RuntimeError('Not found subdirectory for {}.'.format(meta.main_lang))
-        if meta.version==1:
-            for lang in meta.local_languages:
-                if lang not in sub_dirs:
-                    raise RuntimeError('Not found subdirectory for {}.'.format(lang))
+        if meta.main_language not in sub_dirs:
+            raise RuntimeError('Not found subdirectory for {}.'.format(meta.main_language))
+        
+        if meta.local_languages is None:
+            meta.local_languages=sub_dirs
 
         #load .locres files            
         for folder in sub_dirs:
@@ -252,6 +368,12 @@ class LocalizationResources:
                 raise RuntimeError('File not found. ({})'.format(locres_path))
             locres = LocRes.load(locres_path)
             resources.append(locres)
+
+        if meta.version==1:
+            for lang in meta.local_languages:
+                if lang not in sub_dirs:
+                    sub_dirs.append(lang)
+                    resources.append(None)
         return LocalizationResources(meta, sub_dirs, resources)
 
     def save_res(out_dir, res, lang, name):
@@ -263,71 +385,68 @@ class LocalizationResources:
         resource_name = self.meta.resource_name
         dir = os.path.join(out_dir, resource_name)
         mkdir(dir)
+
         #save .locmeta
         meta_path = os.path.join(dir, resource_name+'.locmeta')
         self.meta.save(meta_path)
+
         #save .locres files
-        LocalizationResources.save_res(dir, self.main_res, self.meta.main_lang, resource_name)
+        LocalizationResources.save_res(dir, self.main_res, self.meta.main_language, resource_name)
         for resource, lang in zip(self.resources, self.langs):
+            if resource is None:
+                continue
             LocalizationResources.save_res(dir, resource, lang, resource_name)
+
         return meta_path
 
-    def merge_resources(main_res, sub_res, sub_lang):
-        for ns in main_res:
-            main_res_ns = main_res[ns]
-            if ns not in sub_res:
-                sub_res_ns = {}
+    def save_as_text(self, out_dir, fmt='json'):
+        if fmt not in SUPPORTED_FORMAT:
+            raise RuntimeError('Unsupported format. ({})'.format(fmt))
+
+        dir = os.path.join(out_dir, self.meta.resource_name)
+        mkdir(dir)
+
+        #save locmeta
+        meta_file = os.path.join(dir, 'locmeta.{}'.format(fmt))
+        self.meta.save_as_text(meta_file, self.main_res.version, fmt=fmt)
+
+        #save locres
+        for locres, lang in zip([self.main_res]+self.resources, [self.meta.main_language]+self.langs):
+            if locres is None:
+                continue
+            file = '{}.{}'.format(lang, fmt)
+            file = os.path.join(dir, file)
+            locres.save_as_text(file, fmt=fmt)
+
+        return meta_file
+
+    def load_from_text(file, fmt='json'):
+        dir = os.path.dirname(file)
+        file = os.path.join(dir,'locmeta.{}'.format(fmt))
+        if not os.path.exists(file):
+            raise RuntimeError('File not found ({})'.format(file))
+
+        #load locmeta data
+        meta, res_version = LocMeta.load_from_text(file, fmt=fmt)
+        langs = [meta.main_language] + meta.local_languages
+
+        #load locres data
+        res_files = ['{}.{}'.format(lang, fmt) for lang in langs]
+        res_files = [os.path.join(dir, file) for file in res_files]
+        if not os.path.exists(res_files[0]):
+            raise RuntimeError('Main resource file not found. ({})'.format(res_files[0]))
+        resources = []
+        for file in res_files:
+            if os.path.exists(file):
+                res = LocRes.load_from_text(res_version, file, fmt=fmt)
             else:
-                sub_res_ns = sub_res[ns]
-            for entry in main_res_ns:
-                if entry not in sub_res_ns:
-                    main_res_ns[entry][sub_lang]=None
-                else:
-                    main_res_ns[entry][sub_lang] = sub_res_ns[entry]
+                res = None
+            resources.append(res)
 
-    def save_as_json(self, out_dir):
-        mkdir(out_dir)
-        file = self.meta.resource_name + '.json'
-        file = os.path.join(out_dir, file)
-        j = {'locmeta': self.meta.to_json()}
-        j['locmeta']['local_languages'] = self.langs
-        j['locmeta']['res_version'] = self.main_res.version
+        #generate hash
+        resources[0].gen_hash()
+        for res in resources[1:]:
+            if res is not None:
+                res.copy_hash(resources[0])
 
-        main_j = self.main_res.to_json_with_lang(self.meta.main_lang)
-        resources = [locres.to_json() for locres in self.resources]
-        list(map(lambda x, y: LocalizationResources.merge_resources(main_j, x, y), resources, self.langs))
-        j['locres']=main_j        
-        print('Saving {}...'.format(file))
-        save_json(file, j)
-        return file
-
-    def generate_hash(resource_json, main_language):
-        for ns in resource_json:
-            namespace = resource_json[ns]
-            for key in namespace:
-                entry = namespace[key]
-                key_hash = cityhash.string_cityhash(key)
-                value_hash = crc.string_crc32(entry[main_language])
-                entry['key_hash'] = key_hash
-                entry['value_hash'] = value_hash
-                if entry[main_language] is None:
-                    raise RuntimeError('{}:{}: Value for main language is not found'.format(ns, key))
-
-    def json_to_locres(file):
-        print('Loading {}...'.format(file))
-        j = load_json(file)
-        meta_json = j['locmeta']
-        meta_version = meta_json['meta_version']
-        resource_name = meta_json['resource_name']
-        main_language = meta_json['main_language']
-        main_file = os.path.join(main_language, resource_name+'.locres')
-        local_langs = meta_json['local_languages']
-        meta = LocMeta(meta_version, main_language, main_file, local_langs)
-        langs = [main_language] + local_langs
-        if 'key_hash' in langs or 'value_hash' in langs:
-            raise RuntimeError("Can not use 'key_hash' or 'value_hash' as language.")
-        resource_json = j['locres']
-        res_version = meta_json['res_version']
-        LocalizationResources.generate_hash(resource_json, main_language)
-        resources = [LocRes.json_to_locres(res_version, resource_json, lang) for lang in langs]
         return LocalizationResources(meta, langs, resources)

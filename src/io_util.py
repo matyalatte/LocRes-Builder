@@ -1,4 +1,4 @@
-import os, json
+import os, json, csv
 
 def mkdir(dir):
     os.makedirs(dir, exist_ok=True)
@@ -99,6 +99,17 @@ def save_json(file, j):
     with open(file, 'w', encoding='utf-8') as f:
         json.dump(j, f, indent=4, ensure_ascii=False)
 
+def load_csv(file):
+    with open(file, 'r', encoding='utf-8', newline="") as f:
+        reader = csv.reader(f)
+        rows = [row for row in reader]
+    return rows
+
+def save_csv(file, rows):
+    with open(file, 'w', encoding='utf-8', newline="") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+
 
 def compare_files(file1,file2):
     f1=open(file1, 'rb')
@@ -128,6 +139,8 @@ def compare_files(file1,file2):
 
 def compare(path1, path2, ext=None, rec=0):
     if (not os.path.exists(path1)) or (not os.path.exists(path2)):
+        if os.path.isfile(path1) and get_ext(path1) not in ext:
+            return
         print(path1)
         print(path2)
         raise RuntimeError('File not found.')
@@ -136,6 +149,7 @@ def compare(path1, path2, ext=None, rec=0):
     if os.path.isfile(path1):
         if ext is not None:
             if get_ext(path1) not in ext:
+                print(path1)
                 return
         compare_files(path1, path2)
         return
